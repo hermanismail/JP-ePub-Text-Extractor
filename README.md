@@ -2,7 +2,10 @@
 
 Extracts chapter text from Japanese EPUB files, with proper handling of
 furigana (ruby text — the small hiragana readings printed above/next to
-kanji in Japanese ebooks).
+kanji in Japanese ebooks). 
+
+This tool is optimized to generate text files for audiobook generation tool on my other repo.
+Please take a look at [JP-Audiobook-Generator](https://github.com/hermanismail/JP-Audiobook-Generator)
 
 > **⚠️ Disclaimer:** Only use this tool on EPUB files you have the legal
 > right to extract text from — for example, books you've purchased for
@@ -16,7 +19,7 @@ kanji in Japanese ebooks).
 
 ## Setup (one-time)
 
-See the PowerShell commands your Claude session gave you. In short:
+Run below scripts on your working folder. Worth checking the requirements.txt beforehand to prevent unecessary install.
 
 ```powershell
 cd C:\ePub-Text-Extractor
@@ -38,7 +41,7 @@ cd C:\ePub-Text-Extractor
 python epub_extractor_gui.py
 ```
 
-This opens a window styled after `JP-Audiobook-Generator`'s settings/progress
+This opens settings/progress
 windows.
 
 ### Settings screen
@@ -127,8 +130,7 @@ The classification rule (`CHAPTER_TITLE_PATTERNS` /
 that are:
 
 - a bare number, half- or full-width (`1`, `16`, `１`) — this is the
-  convention the sample book (村上春樹『スプートニクの恋人』, 講談社文庫)
-  uses for every chapter
+  convention the sample book uses for every chapter
 - `第...章` / `第...話` / `第...部` / `第...編` (e.g. 第一章, 第3話)
 - `Chapter N` (romaji headers, seen in some epubs)
 
@@ -166,31 +168,6 @@ Two things in the source EPUB become a section break:
 Files are written with Python's normal text-mode `open(..., "w")`, so on
 Windows a `\n` in the code becomes a real CRLF (`\r\n`) on disk — no extra
 handling needed for that part.
-
-## Verified against a real book
-
-Tested end-to-end against 村上春樹『スプートニクの恋人』(講談社文庫 epub, 25
-spine items, vertical-text typesetting with `<ruby><rb>/<rt></ruby>`
-furigana). All 16 numbered chapters plus front/back matter extracted
-cleanly: correct chapter order, correct furigana handling (including
-multi-character ruby like `完膚(かんぷ)` split across two `<rb>/<rt>`
-pairs), no stray line breaks from the source file's pretty-printed
-indentation. Empty pages (e.g. an image-only cover) are skipped
-automatically. Paragraph/section structure (see above) was checked
-against this book's actual blank-spacer and "＊" divider paragraphs and
-matches `text_pipeline.py`'s `split_sections()`/`split_paragraphs()`
-logic (2+ CRLF vs. single CRLF). The chapter-detection rule (bare-number
-titles) matches this book's actual heading convention exactly.
-
-The chapter-detection + GUI code itself was verified with a synthetic
-fake-`ebooklib` harness (`ebooklib` can't be installed in the cloud
-sandbox that built this, so the harness fakes just the bit of its API
-`extract_epub()` touches) shaped like this book's real structure — see
-`test_extractor.py` for that harness if you want to re-run it. The GUI
-window (`epub_extractor_gui.py`) itself could only be checked for valid
-Python syntax in that sandbox (no display/tkinter available there) — it
-hasn't been visually run yet. Please run it for real once and let your
-Claude session know if anything looks off.
 
 ## Notes / known limitations
 
