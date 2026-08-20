@@ -190,3 +190,7 @@ Claude session know if anything looks off.
 - Chapter detection (`CHAPTER_TITLE_PATTERNS`) only matches a few common
   numbering conventions for now — see "Chapter detection" above for how
   to extend it as new book formats come up.
+=======
+# JP-ePub-Text-Extractor
+This tool will extract chapters from Japanese epub file and output to txt files.
+
