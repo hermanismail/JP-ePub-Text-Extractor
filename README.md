@@ -4,6 +4,16 @@ Extracts chapter text from Japanese EPUB files, with proper handling of
 furigana (ruby text — the small hiragana readings printed above/next to
 kanji in Japanese ebooks).
 
+> **⚠️ Disclaimer:** Only use this tool on EPUB files you have the legal
+> right to extract text from — for example, books you've purchased for
+> personal use, public-domain works, or your own writing. Extracted text
+> is still subject to copyright even after it's converted to `.txt`.
+> Redistributing or publishing extracted text from a copyrighted book
+> without permission from the rights holder can create legal liability
+> for you. This project does not include, host, or distribute any book
+> content — it is a text-processing tool only, and responsibility for
+> how it's used with any given EPUB rests with the person running it.
+
 ## Setup (one-time)
 
 See the PowerShell commands your Claude session gave you. In short:
@@ -29,23 +39,39 @@ python epub_extractor_gui.py
 ```
 
 This opens a window styled after `JP-Audiobook-Generator`'s settings/progress
-windows:
+windows.
 
-1. **EPUB File** — Browse to pick the `.epub` file.
-2. **Output Folder** — Browse to pick (or create) where the extracted
-   `.txt` files go. Defaults to an `output` folder next to the epub once
-   you pick a file.
-3. Three switches:
-   - **Auto-detect chapters** (on by default) — see "Chapter detection"
-     below.
-   - **Keep furigana** — off by default (furigana is discarded); turn on
-     to render it inline as 漢字(かんじ) instead.
-   - **Keep scene-divider glyphs** — off by default (glyphs like "＊"
-     become a blank-line section break); turn on to keep them as literal
-     text instead.
-4. Click **Extract**. A progress window opens showing a live log of each
-   item as it's read, then a completed/failed summary with **Open Output
-   Folder** and **Close** buttons.
+### Settings screen
+
+![Settings screen](GUI-setting.png)
+
+The top section picks the input/output paths; the panel below controls
+how extraction behaves.
+
+| Field / control | What it does |
+| --- | --- |
+| **EPUB File** | Path to the Japanese `.epub` file to extract from. Use **Browse** to pick it with a file dialog. |
+| **Output Folder** | Where the extracted `.txt` files are saved. Defaults to an `output` folder next to the epub once a file is picked; **Browse** lets you pick or create a different folder. |
+| **Auto-detect chapters** | **ON** by default. Splits spine items into real chapters (numbered `chapter_001.txt`, `chapter_002.txt`, ... directly in the output folder) vs. everything else (title pages, colophons, afterwords — sent to `non-chapters-files\`). See "Chapter detection" below for the rules. Turning this **OFF** falls back to the flat mode — every item gets its own numbered file, no chapter/non-chapter split. |
+| **Keep furigana** | **OFF** by default, meaning furigana (ruby readings) are discarded and only the base kanji/text is kept. Turn **ON** to keep the reading inline instead, rendered as 漢字(かんじ). |
+| **Keep scene-divider glyphs** | **OFF** by default, meaning a typographic scene-divider glyph (e.g. a centered ＊) is dropped from the text and turned into a section break (blank line) instead — so it isn't read aloud by a downstream TTS engine. Turn **ON** to keep the glyph as literal text rather than converting it to a section break. |
+| **Extract** | Starts extraction and opens the progress window below. |
+
+### Progress / completion screen
+
+![Progress and completion screen](GUI-completion.png)
+
+| Element | What it shows |
+| --- | --- |
+| Status banner (✓ **Completed** / in-progress / failed) | Overall run status, with a short one-line summary underneath. |
+| Progress bar | Live position — "Item *N* of *Total*", the current item being read (e.g. `Reading: text00023`), and percent complete. |
+| **Items Scanned** | Total spine items read from the epub. |
+| **Chapters Found** | How many of those were classified as real chapters (written as `chapter_NNN.txt`). |
+| **Non-Chapters** | How many were classified as front/back matter etc. (written to `non-chapters-files\`). |
+| **Total Time** | Wall-clock time the extraction run took. |
+| **Process Log** | Scrolling, timestamped log of each item as it's processed — shows whether each was classified as a chapter or non-chapter, its detected title, and character count. **Clear Log** clears this panel (doesn't affect output files). |
+| **Open Output Folder** | Opens the output folder (from the Settings screen) in File Explorer. |
+| **Close** | Closes the progress window. |
 
 ## Command line
 
@@ -190,7 +216,4 @@ Claude session know if anything looks off.
 - Chapter detection (`CHAPTER_TITLE_PATTERNS`) only matches a few common
   numbering conventions for now — see "Chapter detection" above for how
   to extend it as new book formats come up.
-=======
-# JP-ePub-Text-Extractor
-This tool will extract chapters from Japanese epub file and output to txt files.
 
