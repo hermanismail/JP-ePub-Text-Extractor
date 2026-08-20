@@ -214,5 +214,11 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Project-specific
+*.epub
+output/
+chapter_*.txt
+non-chapters-files/
+
 # Streamlit
 .streamlit/secrets.toml
