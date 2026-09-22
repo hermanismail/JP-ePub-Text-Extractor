@@ -17,22 +17,22 @@ JP-Audiobook-Generator (see its README section 7.1: "Section — a run of
 sentences that ends with more than one CRLF in a row"). Use
 --keep-scene-markers to keep divider glyphs as literal text instead.
 
-Chapter detection (new): by default, each spine item is classified as a
-real "chapter" or not, using a small set of rule-based patterns matched
-against its detected title (see CHAPTER_TITLE_PATTERNS below). Chapters
-are renumbered sequentially and written as chapter_001.txt, chapter_002.txt,
-... directly in the output folder (matching the chapter_*.txt naming
-JP-Audiobook-Generator's run_audiobook.py expects to find there). Anything
-that doesn't look like a chapter (title pages, colophons, translator's
-notes, etc.) is written into a "non-chapters-files" subfolder instead, so
-it's out of the way but still easy to eyeball. This is intentionally a
-rough-and-ready rule set, not a perfect classifier - use --flat to fall
-back to the old behavior (every item written flat, no splitting) if it
-guesses wrong for a given book, and extend CHAPTER_TITLE_PATTERNS as new
-epub formats show up.
+Chapter detection: by default the book's chapters are found by
+book_structure.py (numbered headings in the text, cross-checked against
+the table of contents) and written down as chapters.plan.json in the
+output folder BEFORE any text is written. Chapters are cut at their
+headings regardless of file boundaries and written as chapter_001.txt,
+chapter_002.txt, ... (the naming JP-Audiobook-Generator expects); front
+and back matter go into a "non-chapters-files" subfolder. An afterword is
+never decided automatically - it is always asked (--afterword yes|no). A
+plan the two sources disagree on stops for review unless --yes is given;
+edit chapters.plan.json and write it with --from-plan. --flat falls back
+to one file per spine item.
 
 Usage:
-    python epub_extractor.py "path\\to\\book.epub" -o output_folder
+    python epub_extractor.py "path\\to\\book.epub" -o output_folder --afterword no
+    python epub_extractor.py "path\\to\\book.epub" -o output_folder --plan-only
+    python epub_extractor.py --from-plan output_folder\\chapters.plan.json -o output_folder
     python epub_extractor.py "path\\to\\book.epub" -o output_folder --keep-furigana
     python epub_extractor.py "path\\to\\book.epub" -o output_folder --single-file
     python epub_extractor.py "path\\to\\book.epub" -o output_folder --keep-scene-markers
@@ -202,43 +202,10 @@ def get_chapter_title(html: bytes, fallback: str) -> str:
     return fallback
 
 
-# ---------------------------------------------------------------------------
-# Chapter detection (rule-based)
-# ---------------------------------------------------------------------------
-# A spine item is treated as a real "chapter" if its detected title (from
-# get_chapter_title(), i.e. the first h1/h2/h3/<title> found in that item's
-# HTML) matches one of these patterns. This was fit to a real 講談社文庫
-# novel epub, where every chapter is headed by nothing but a bare number
-# (e.g. "１" full-width, or "16"), while front/back matter (title page,
-# publisher's notes, colophon, etc.) either has a descriptive heading or no
-# heading at all (falling back to the item's internal filename, which
-# won't match these patterns either). A couple of other very common
-# Japanese novel/light-novel chapter-heading conventions are included too,
-# since they're likely to show up in other books even though the one
-# sample this was validated against doesn't use them.
-#
-# This is deliberately not meant to be a perfect/complete classifier - it's
-# a starting rule set that will misclassify some books. When that happens:
-#   1. Check the "non-chapters-files" subfolder - real chapters that were
-#      missed land there, alongside genuine front/back matter.
-#   2. Add a new pattern to this list (or loosen an existing one) to match
-#      that book's chapter-heading convention, then re-run.
-#   3. Or pass --flat to skip classification entirely and get every spine
-#      item as its own file, numbered in reading order (the old behavior).
-CHAPTER_TITLE_PATTERNS = [
-    re.compile(r"^[0-9０-９]+$"),                                    # bare number: "1", "16", "１"
-    re.compile(r"^第[0-9０-９一二三四五六七八九十百千]+[章話部編]$"),   # 第一章 / 第1話 / 第３部
-    re.compile(r"^[Cc]hapter\s*[0-9０-９]+$"),                        # "Chapter 1" (romaji headers)
-]
-
-
-def is_chapter_title(title: str) -> bool:
-    """Return True if `title` matches one of CHAPTER_TITLE_PATTERNS."""
-    title = title.strip()
-    if not title:
-        return False
-    return any(pattern.match(title) for pattern in CHAPTER_TITLE_PATTERNS)
-
+# Chapter detection lives in book_structure.py. The old rule here matched
+# one heading per spine item against three title patterns; it fit one
+# book and failed on most others (headings drawn as images, several
+# chapters per file, a chapter spread over several files).
 
 NON_CHAPTER_SUBDIR = "non-chapters-files"
 
@@ -252,6 +219,10 @@ class ExtractResult:
     non_chapter_dir: Optional[Path] = None
     combined_file: Optional[Path] = None
     cancelled: bool = False
+    plan_file: Optional[Path] = None
+    # detection ran and the plan was saved, but nothing was written: an
+    # unanswered afterword question or a plan waiting for review
+    stopped: str = ""
 
 
 def extract_epub(
@@ -264,6 +235,9 @@ def extract_epub(
     log=print,
     on_progress=None,
     cancel_event=None,
+    include_afterword=None,
+    accept_review=False,
+    ask=None,
 ) -> ExtractResult:
     """
     Parse `epub_path` and write its chapter text into `out_dir`.
@@ -276,18 +250,28 @@ def extract_epub(
         chapter/non-chapter classification doesn't apply.
     cancel_event: optional threading.Event; checked between items so a GUI
         can request an early, cooperative stop.
+    include_afterword: True/False answers the afterword question up front;
+        None leaves it to `ask`.
+    accept_review: write a plan that has warnings without asking.
+    ask: optional callable(kind, text) -> bool, used by the chapter
+        detection path. kind "afterword": include it as a chapter?
+        kind "review": the plan has warnings - write it anyway? With no
+        `ask` and no answer, the run stops after saving the plan.
     """
-    book = epub.read_epub(epub_path)
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
+    if detect_chapters and not single_file:
+        return _extract_by_plan(epub_path, out_path, keep_furigana, keep_scene_markers,
+                                log, on_progress, cancel_event, include_afterword,
+                                accept_review, ask)
+
+    book = epub.read_epub(epub_path)
 
     # Walk the spine in reading order so chapters come out in the order
     # the book is meant to be read, not just file order in the archive.
     spine_ids = [item_id for item_id, _linear in book.spine]
     items_by_id = {item.get_id(): item for item in book.get_items_of_type(ITEM_DOCUMENT)}
     total_items = len(spine_ids)
-
-    classify = detect_chapters and not single_file
 
     chapters = []  # (idx, title, text, is_chapter or None)
     for pos, item_id in enumerate(spine_ids, start=1):
@@ -309,16 +293,10 @@ def extract_epub(
                 on_progress(pos, total_items, title, None)
             continue
 
-        is_chap = is_chapter_title(title) if classify else None
-        chapters.append((pos, title, text, is_chap))
-
-        if classify:
-            tag = "chapter" if is_chap else "non-chapter"
-        else:
-            tag = "item"
-        log(f"  [{pos:03d}/{total_items:03d}] {tag}: \"{title}\" ({len(text)} chars)")
+        chapters.append((pos, title, text, None))
+        log(f"  [{pos:03d}/{total_items:03d}] item: \"{title}\" ({len(text)} chars)")
         if on_progress:
-            on_progress(pos, total_items, title, is_chap)
+            on_progress(pos, total_items, title, None)
 
     if not chapters:
         log("No chapter text found. The EPUB may use an unsupported structure.")
@@ -334,41 +312,84 @@ def extract_epub(
         log(f"Wrote {len(chapters)} chapters to {combined_path}")
         return ExtractResult(out_path, total_items, len(chapters), 0, combined_file=combined_path)
 
-    if not detect_chapters:
-        for idx, title, text, _is_chap in chapters:
-            fname = f"{idx:03d}_{sanitize_filename(title)}.txt"
-            with open(out_path / fname, "w", encoding="utf-8") as f:
-                f.write(text)
-        log(f"Wrote {len(chapters)} chapter files to {out_path}")
-        return ExtractResult(out_path, total_items, len(chapters), 0)
-
-    # --- default: rule-based chapter detection + separation ---
-    non_chapter_dir = out_path / NON_CHAPTER_SUBDIR
-    chapter_num = 0
-    non_chapter_count = 0
-    for idx, title, text, is_chap in chapters:
-        if is_chap:
-            chapter_num += 1
-            fpath = out_path / f"chapter_{chapter_num:03d}.txt"
-        else:
-            non_chapter_dir.mkdir(parents=True, exist_ok=True)
-            non_chapter_count += 1
-            fpath = non_chapter_dir / f"{idx:03d}_{sanitize_filename(title)}.txt"
-        with open(fpath, "w", encoding="utf-8") as f:
+    # --flat: one file per spine item, in reading order
+    for idx, title, text, _is_chap in chapters:
+        fname = f"{idx:03d}_{sanitize_filename(title)}.txt"
+        with open(out_path / fname, "w", encoding="utf-8") as f:
             f.write(text)
+    log(f"Wrote {len(chapters)} chapter files to {out_path}")
+    return ExtractResult(out_path, total_items, len(chapters), 0)
 
-    log(f"Wrote {chapter_num} chapter file(s) to {out_path}")
-    if non_chapter_count:
-        log(f"Wrote {non_chapter_count} non-chapter file(s) to {non_chapter_dir}")
+
+def _extract_by_plan(epub_path, out_path, keep_furigana, keep_scene_markers, log,
+                     on_progress, cancel_event, include_afterword, accept_review, ask):
+    """Detect -> save chapters.plan.json -> ask what must be asked -> write."""
+    import book_structure as bs
+
+    log(f"Detecting chapters in {Path(epub_path).name} ...")
+    plan = bs.build_plan(epub_path, keep_furigana, keep_scene_markers)
+    total = len(plan["units"])
+    if on_progress:
+        on_progress(total, total, "chapter plan", None)
+    for line in bs.plan_table(plan).splitlines():
+        log("  " + line)
+    plan_file = bs.save_plan(plan, out_path)
+    log(f"Plan saved: {plan_file}")
+
+    def stop(reason):
+        log(f"Stopped before writing: {reason}")
+        return ExtractResult(out_path, total, 0, 0, plan_file=plan_file, stopped=reason)
+
+    if plan["questions"]:
+        if include_afterword is None and ask is not None:
+            names = ", ".join(u["title"] for u in bs.open_questions(plan))
+            include_afterword = ask("afterword", f"Include the afterword as a chapter?\n\n{names}")
+        if include_afterword is None:
+            return stop("the afterword question is unanswered (--afterword yes|no)")
+        bs.answer_afterwords(plan, include_afterword)
+        log(f"Afterword: {'included' if include_afterword else 'not included'}")
+    if plan["needs_review"] and not accept_review:
+        ok = ask is not None and ask("review", "\n".join(plan["warnings"]))
+        if not ok:
+            return stop(f"the plan needs review - edit {plan_file.name}, then write it "
+                        f"with --from-plan (or re-run with --yes)")
+    if cancel_event is not None and cancel_event.is_set():
+        log("Cancelled by user.")
+        return ExtractResult(out_path, total, 0, 0, cancelled=True, plan_file=plan_file)
+    return _write_from_plan(plan, out_path, log)
+
+
+def _write_from_plan(plan, out_path, log):
+    import book_structure as bs
+
+    stale = sorted(p.name for p in out_path.glob("chapter_*.txt"))
+    bs.write_plan(plan, out_path, log=lambda s: log("  " + s))
+    chapters = plan["written"]["chapters"]
+    others = [f for f in plan["written"]["files"] if f.startswith(NON_CHAPTER_SUBDIR)]
+    extra = [n for n in stale if n not in {f"chapter_{i:03d}.txt" for i in range(1, chapters + 1)}]
+    if extra:
+        log(f"Note: {len(extra)} older chapter file(s) from a previous run are still in "
+            f"the folder and were not touched: {', '.join(extra[:5])}")
+    log(f"Wrote {chapters} chapter file(s) to {out_path}")
+    if others:
+        log(f"Wrote {len(others)} non-chapter file(s) to {out_path / NON_CHAPTER_SUBDIR}")
     return ExtractResult(
-        out_path, total_items, chapter_num, non_chapter_count,
-        non_chapter_dir=non_chapter_dir if non_chapter_count else None,
+        out_path, len(plan["units"]), chapters, len(others),
+        non_chapter_dir=(out_path / NON_CHAPTER_SUBDIR) if others else None,
+        plan_file=out_path / bs.PLAN_NAME,
     )
+
+
+def extract_from_plan(plan_path, out_dir, log=print):
+    """Write the text files from a saved (possibly hand-edited) plan."""
+    import book_structure as bs
+
+    return _write_from_plan(bs.load_plan(plan_path), Path(out_dir), log)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Extract chapter text from a Japanese EPUB file.")
-    parser.add_argument("epub_path", help="Path to the .epub file")
+    parser.add_argument("epub_path", nargs="?", help="Path to the .epub file")
     parser.add_argument("-o", "--output", default="output", help="Output folder (default: output)")
     parser.add_argument(
         "--keep-furigana",
@@ -397,20 +418,60 @@ def main():
             f"non-chapter items into a '{NON_CHAPTER_SUBDIR}' subfolder"
         ),
     )
+    parser.add_argument(
+        "--afterword", choices=["yes", "no"],
+        help="Include the afterword (あとがき etc.) as a chapter. Always asked: "
+             "without this flag a book that has one stops after saving the plan",
+    )
+    parser.add_argument(
+        "--yes", action="store_true",
+        help="Write a plan that has warnings (sources disagree) without stopping for review",
+    )
+    parser.add_argument(
+        "--plan-only", action="store_true",
+        help="Detect chapters and save chapters.plan.json in the output folder; write no text",
+    )
+    parser.add_argument(
+        "--from-plan", metavar="PLAN",
+        help="Write the text files from a saved (possibly edited) chapters.plan.json",
+    )
     args = parser.parse_args()
 
-    if not os.path.isfile(args.epub_path):
+    if args.from_plan:
+        import book_structure as bs
+        plan = bs.load_plan(args.from_plan)
+        if args.afterword:
+            bs.answer_afterwords(plan, args.afterword == "yes")
+        if bs.open_questions(plan):
+            print("The plan has an unanswered afterword question - pass --afterword yes|no "
+                  "or set its \"include\" in the plan.", file=sys.stderr)
+            sys.exit(2)
+        _write_from_plan(plan, Path(args.output), print)
+        return
+
+    if not args.epub_path or not os.path.isfile(args.epub_path):
         print(f"File not found: {args.epub_path}", file=sys.stderr)
         sys.exit(1)
 
-    extract_epub(
+    if args.plan_only:
+        import book_structure as bs
+        plan = bs.build_plan(args.epub_path, args.keep_furigana, args.keep_scene_markers)
+        print(bs.plan_table(plan))
+        print(f"Plan saved: {bs.save_plan(plan, args.output)}")
+        return
+
+    result = extract_epub(
         args.epub_path,
         args.output,
         args.keep_furigana,
         args.single_file,
         args.keep_scene_markers,
         detect_chapters=not args.flat,
+        include_afterword=None if args.afterword is None else args.afterword == "yes",
+        accept_review=args.yes,
     )
+    if result.stopped:
+        sys.exit(2)
 
 
 if __name__ == "__main__":

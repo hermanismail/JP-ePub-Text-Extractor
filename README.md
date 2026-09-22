@@ -55,7 +55,7 @@ how extraction behaves.
 | --- | --- |
 | **EPUB File** | Path to the Japanese `.epub` file to extract from. Use **Browse** to pick it with a file dialog. |
 | **Output Folder** | Where the extracted `.txt` files are saved. Defaults to an `output` folder next to the epub once a file is picked; **Browse** lets you pick or create a different folder. |
-| **Auto-detect chapters** | **ON** by default. Splits spine items into real chapters (numbered `chapter_001.txt`, `chapter_002.txt`, ... directly in the output folder) vs. everything else (title pages, colophons, afterwords — sent to `non-chapters-files\`). See "Chapter detection" below for the rules. Turning this **OFF** falls back to the flat mode — every item gets its own numbered file, no chapter/non-chapter split. |
+| **Auto-detect chapters** | **ON** by default. Splits spine items into real chapters (numbered `chapter_001.txt`, `chapter_002.txt`, ... directly in the output folder) vs. everything else (title pages, colophons — sent to `non-chapters-files\`); an afterword is always asked with a Yes/No dialog. See "Chapter detection" below. Turning this **OFF** falls back to the flat mode — every item gets its own numbered file, no chapter/non-chapter split. |
 | **Keep furigana** | **OFF** by default, meaning furigana (ruby readings) are discarded and only the base kanji/text is kept. Turn **ON** to keep the reading inline instead, rendered as 漢字(かんじ). |
 | **Keep scene-divider glyphs** | **OFF** by default, meaning a typographic scene-divider glyph (e.g. a centered ＊) is dropped from the text and turned into a section break (blank line) instead — so it isn't read aloud by a downstream TTS engine. Turn **ON** to keep the glyph as literal text rather than converting it to a section break. |
 | **Extract** | Starts extraction and opens the progress window below. |
@@ -89,8 +89,18 @@ Then run:
 
 ```powershell
 # Chapter detection on by default: chapter_001.txt, chapter_002.txt, ...
-# in the output folder; everything else goes into non-chapters-files\
-python epub_extractor.py "C:\path\to\book.epub" -o output
+# in the output folder; everything else goes into non-chapters-files\.
+# A book with an afterword stops until you answer --afterword yes|no.
+python epub_extractor.py "C:\path\to\book.epub" -o output --afterword no
+
+# Only detect: save output\chapters.plan.json and print the table
+python epub_extractor.py "C:\path\to\book.epub" -o output --plan-only
+
+# Write from a plan you checked or edited ("include": true/false per row)
+python epub_extractor.py --from-plan output\chapters.plan.json -o output
+
+# Write a plan that has warnings without stopping for review
+python epub_extractor.py "C:\path\to\book.epub" -o output --afterword no --yes
 
 # Keep furigana inline, e.g. 漢字(かんじ)
 python epub_extractor.py "C:\path\to\book.epub" -o output --keep-furigana
@@ -110,42 +120,54 @@ python epub_extractor.py "C:\path\to\book.epub" -o output --flat
 
 ## Chapter detection
 
-By default (GUI: "Auto-detect chapters" ON; CLI: no `--flat` flag), each
-EPUB spine item is classified as a real chapter or not, based on its
-detected title (the first `<h1>`/`<h2>`/`<h3>`/`<title>` found in that
-item's HTML):
+By default (GUI: "Auto-detect chapters" ON; CLI: no `--flat` flag) the
+chapters are found by `book_structure.py` and written down as
+**`chapters.plan.json`** in the output folder *before* any text is written.
+The log shows the plan as a table: every unit of the book, its kind
+(front / part / chapter / afterword / back), whether it will be written as
+a chapter, its title, length and first words.
 
-- **Chapters** are renumbered in reading order and written directly in
-  the output folder as `chapter_001.txt`, `chapter_002.txt`, etc. — this
-  matches the `chapter_*.txt` naming `JP-Audiobook-Generator`'s
-  `run_audiobook.py` expects to find in its input folder, so the output
-  folder here can be pointed at directly as that pipeline's input.
-- **Everything else** (title pages, publisher's notes, colophons,
-  translator's afterwords, etc.) is written into a `non-chapters-files`
-  subfolder, keeping the original `NNN_Title.txt` numbering so it's easy
-  to trace back to its position in the book.
+Two independent sources are cross-checked:
 
-The classification rule (`CHAPTER_TITLE_PATTERNS` /
-`is_chapter_title()` in `epub_extractor.py`) currently matches titles
-that are:
+- **Headings in the text** — a short paragraph that is a number (`１`,
+  `12`), `第N章` / `第N話` (kanji incl. 壱弐参, spaces inside allowed), or a
+  number plus a title (`第１章　青豆`, `１　火曜日のねじまき鳥…`); image
+  `alt` text counts. It must be followed by real text and not be a link,
+  which rules out the book's own contents page and part dividers, and the
+  numbers must count 1, 2, 3… (restarting after a `第N部` is allowed).
+- **The table of contents** (`nav.xhtml`, else `toc.ncx`) — each entry's
+  label says what it is (chapter, あとがき, 奥付, 第N部, 目次…) and its link
+  says where it starts.
 
-- a bare number, half- or full-width (`1`, `16`, `１`) — this is the
-  convention the sample book uses for every chapter
-- `第...章` / `第...話` / `第...部` / `第...編` (e.g. 第一章, 第3話)
-- `Chapter N` (romaji headers, seen in some epubs)
+When both find the chapters and agree, the plan says `agree`; when they
+disagree, the TOC is used and the run **stops for review** (GUI: a
+Yes/No dialog; CLI: `--yes` or `--from-plan`). Chapters are cut at their
+headings **regardless of file boundaries**, so a chapter spread over
+several files, or several chapters in one file, come out whole.
 
-This is a **rough, rule-based first pass, not a perfect classifier** — by
-design, since every book's epub is a little different and it's meant to
-be verified by eye each run rather than trusted blindly. If it
-misclassifies a book:
+- **Chapters** are written as `chapter_001.txt`, `chapter_002.txt`, … —
+  the naming `JP-Audiobook-Generator` expects, so the output folder can be
+  its input folder.
+- **An afterword (あとがき, 解説…) is always asked, never decided** — GUI:
+  a Yes/No dialog; CLI: `--afterword yes|no` (without it the run stops
+  after saving the plan). Yes makes it the next chapter.
+- **Everything else** (title pages, contents, part dividers, colophons,
+  credits) goes into `non-chapters-files\` as `NNN_Title.txt`, NNN being
+  the unit's row in the plan.
 
-1. Check the `non-chapters-files` subfolder — a real chapter that got
-   missed will be sitting in there under its original `NNN_Title.txt`
-   name.
-2. Add a pattern to `CHAPTER_TITLE_PATTERNS` (or loosen an existing one)
-   to match that book's chapter-heading convention, and re-run.
-3. Or turn off "Auto-detect chapters" (GUI) / pass `--flat` (CLI) to skip
-   classification entirely and get the old flat, numbered-per-item output.
+To correct a plan by hand, set a row's `"include"` to `true`/`false` in
+`chapters.plan.json` and run `--from-plan`. A plan remembers the epub's
+SHA-256 and refuses to write if the file has changed.
+
+**Vertical-form text is normalised**: some epubs are typeset with
+vertical presentation forms (`﹁﹂` for `「」`, `｜` for the long vowel
+`ー`). They are mapped back, `｜` only straight after kana, and the table
+reports how many characters changed.
+
+**`check_books.py`** runs detection over the real sample books in
+`F:\EPUB` and checks each against a verified chapter count, titles and
+text. Run it after touching `book_structure.py`; `test_extractor.py`
+needs no books.
 
 ## Paragraph / section structure
 
@@ -171,11 +193,10 @@ handling needed for that part.
 
 ## Notes / known limitations
 
-- Chapter titles are pulled from the first `<h1>`/`<h2>`/`<h3>`/`<title>`
-  found in each spine item. If a book doesn't mark titles this way, files
-  fall back to a numbered name based on the internal file name (and won't
-  match the chapter-detection patterns, so they land in
-  `non-chapters-files`).
+- A chapter's heading line (e.g. `１`, `第１章　青豆`) stays at the top of
+  its chapter text, as it always has. Its title is also in the plan.
+- A book with no numbered headings AND no usable table of contents falls
+  back to one chapter per long file and always stops for review.
 - Ruby spanning multiple kanji with irregular groupings (common in some
   Japanese typesetting) is handled on a best-effort basis — the base text
   inside each `<ruby>` tag is kept in full; only the `<rt>` reading is
@@ -190,7 +211,7 @@ handling needed for that part.
   △, ◇, ☆, ★, †, ‡, ~, 〜, -, －, ー). A book using a different divider
   convention would need that pattern extended, or run with
   `--keep-scene-markers` and handle it downstream instead.
-- Chapter detection (`CHAPTER_TITLE_PATTERNS`) only matches a few common
-  numbering conventions for now — see "Chapter detection" above for how
-  to extend it as new book formats come up.
+- A new book that trips the detection: add it to `CHECKS` in
+  `check_books.py` with what it should produce, then fix
+  `book_structure.py` until every book passes.
 
