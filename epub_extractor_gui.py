@@ -751,6 +751,20 @@ class ExtractorApp(ctk.CTk):
         elif kind == "result":
             _, result = msg
             self._on_extraction_result(result)
+        elif kind == "ask":
+            _, question, text, reply = msg
+            if question == "afterword":
+                answer = messagebox.askyesno("Afterword", text, parent=self._run_window)
+            else:
+                answer = messagebox.askyesno(
+                    "Check the chapter plan",
+                    "The chapter detection is unsure about this book:\n\n" + text +
+                    "\n\nThe full table is in the log. Write the chapters anyway?\n\n"
+                    "No = stop here; edit chapters.plan.json in the output folder and "
+                    "write it from the command line with --from-plan.",
+                    parent=self._run_window)
+            reply["answer"] = answer
+            reply["event"].set()
         elif kind == "error":
             _, message = msg
             self._run_window.append_log(message, tag="error")
@@ -764,6 +778,9 @@ class ExtractorApp(ctk.CTk):
         )
         if result.cancelled:
             self._run_window.set_state("cancelled")
+        elif result.stopped:
+            self._run_window.append_log(f"Nothing written: {result.stopped}", tag="error")
+            self._run_window.set_state("failed")
         elif result.chapter_count == 0 and result.non_chapter_count == 0 and not result.combined_file:
             self._run_window.append_log(
                 "No chapter text found - the EPUB may use an unsupported structure.",
@@ -797,6 +814,13 @@ def _run_extraction(epub_path, output_dir, keep_furigana, keep_scene_markers,
     def on_progress(pos, total, title, is_chapter):
         out_queue.put(("progress", pos, total, title, is_chapter))
 
+    def ask(question, text):
+        # dialogs belong to the main thread: post the question, wait for it
+        reply = {"event": threading.Event(), "answer": None}
+        out_queue.put(("ask", question, text, reply))
+        reply["event"].wait()
+        return reply["answer"]
+
     try:
         result = extract_epub(
             epub_path, output_dir,
@@ -807,15 +831,8 @@ def _run_extraction(epub_path, output_dir, keep_furigana, keep_scene_markers,
             log=log,
             on_progress=on_progress,
             cancel_event=cancel_event,
+            ask=ask,
         )
-        if (detect_chapters and not result.cancelled
-                and result.chapter_count == 0 and result.non_chapter_count > 0):
-            log(f"No items matched the chapter-detection rules - all "
-                f"{result.non_chapter_count} item(s) went into "
-                f"\"{NON_CHAPTER_SUBDIR}\". Check that folder and, if real "
-                f"chapters were missed, extend CHAPTER_TITLE_PATTERNS in "
-                f"epub_extractor.py (or turn off Auto-detect chapters and "
-                f"re-run).")
         out_queue.put(("result", result))
     except Exception:
         out_queue.put(("error", "Extraction failed:\n" + traceback.format_exc()))
