@@ -502,6 +502,7 @@ def build_plan(epub_path, keep_furigana=False, keep_scene_markers=False, normali
     # --- titles, parts, include, questions
     part = ""
     out, chapter_no = [], 0
+    last_number, before_first = None, []
     for n, u in enumerate(units, 1):
         start, end = u["start"], u["end"]
         chars = book.text_chars(start, end)
@@ -512,20 +513,45 @@ def build_plan(epub_path, keep_furigana=False, keep_scene_markers=False, normali
         title = u["label"] or head or book.file_title(fi)
         preview = next((p["text"] for p in book.paras[start:end]
                         if p["text"] and not p["heading"]), "")[:40]
+        # the chapter's own number, and its title with that number taken off
+        parsed = parse_heading(head) or parse_heading(title)
+        number = parsed[0] if parsed and parsed[1] == "chapter" else None
+        name = parsed[2] if parsed and parsed[1] == "chapter" else squash(title)
         row = {"n": n, "kind": u["kind"], "include": u["kind"] == "chapter",
-               "title": title, "part": part if u["kind"] == "chapter" else "",
+               "title": title, "number": number, "name": name,
+               "part": part if u["kind"] == "chapter" else "",
                "start": _loc(book, start), "end": _loc(book, end),
                "files": sorted({book.spine[p["file"]] for p in book.paras[start:end]}),
                "chars": chars, "preview": preview}
         if u["kind"] == "chapter":
             chapter_no += 1
             row["chapter"] = chapter_no
+            if row["number"] is not None:
+                last_number = row["number"]
+            elif last_number is None:
+                # a prologue before chapter 1 (kafka: カラスと呼ばれる少年);
+                # numbered backwards from 0 once the first number is known
+                before_first.append(row)
+            else:
+                # 外伝 after the last numbered chapter: carry on counting
+                last_number += 1
+                row["number"] = last_number
         if u["kind"] == "afterword":
+            # only used if it is answered yes and becomes a chapter
+            if row["number"] is None and last_number is not None:
+                last_number += 1
+                row["number"] = last_number
             row["include"] = None
             questions.append({"unit": n, "ask": f"Include the afterword {title!r} as a chapter?"})
         if chars == 0 and u["kind"] != "chapter":
             row["include"] = False
         out.append(row)
+
+    for k, row in enumerate(reversed(before_first)):
+        row["number"] = -k
+    if any(r["number"] < 0 for r in before_first):
+        warnings.append(f"{len(before_first)} chapters before the book's chapter 1 have no "
+                        f"number of their own - numbered 第0章 backwards")
 
     empty = [r for r in out if r["kind"] == "chapter" and r["chars"] < MIN_FOLLOW_CHARS]
     for r in empty:
@@ -577,15 +603,59 @@ def load_plan(path):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def chapter_header(unit):
+    """The standard opening of a chapter file:
+
+        第X章
+        <blank>
+        青豆                  (only if the chapter has a title)
+        <blank>
+
+    X is the chapter's own number however the book wrote it (１, 第壱章,
+    13), so a numbering drift is visible at a glance; a chapter with no
+    number of its own (外伝, a prologue) gets its position in the book.
+    """
+    lines = [f"第{unit['number']}章"]
+    if unit.get("name"):
+        lines.append(unit["name"])
+    return lines
+
+
+def _skip_heading_paragraphs(book, start, end, unit):
+    """How many paragraphs at the top of a chapter the header replaces:
+    its heading line, and a title line the header now carries (1q84 prints
+    the narrator and the subtitle on two lines under the number)."""
+    bare = lambda s: re.sub(r"[\s　]", "", s)          # noqa: E731
+    title = bare(unit.get("title") or "")
+    skip = 0
+    for p in book.paras[start:min(start + 3, end)]:
+        t = bare(p["text"])
+        if p["heading"] or not t:
+            skip += 1
+        elif title and t in title and len(t) <= MAX_HEADING_CHARS:
+            skip += 1
+        else:
+            break
+    return skip
+
+
 def unit_text(book, unit):
-    """A unit's text; a file boundary inside a unit becomes a section break."""
+    """A unit's text; a file boundary inside a unit becomes a section break.
+    An included chapter opens with the standard 第X章 header."""
     start, end = _pos(book, unit["start"]), _pos(book, unit["end"])
+    head = []
+    if unit.get("include") and unit.get("number") is not None:
+        head = chapter_header(unit)
+        start += _skip_heading_paragraphs(book, start, end, unit)
     paras, last_file = [], None
     for p in book.paras[start:end]:
         if last_file is not None and p["file"] != last_file:
             paras.append("")
         paras.append(p["text"])
         last_file = p["file"]
+    if head:
+        # each header line is its own section, i.e. followed by a blank line
+        paras = [line for h in head for line in (h, "")] + paras
     return paras_to_text(paras)
 
 

@@ -93,11 +93,14 @@ def test_plan_path(tmp):
     names = sorted(p.name for p in out.glob("chapter_*.txt"))
     assert names == ["chapter_001.txt", "chapter_002.txt", "chapter_003.txt"], names
     ch1 = (out / "chapter_001.txt").read_text(encoding="utf-8")
+    assert ch1.startswith("第1章\n\nこれは本文"), repr(ch1[:20])   # header replaces the "１" line
     assert "続き。" in ch1, "chapter 1 must continue into the next file"
     assert "「コーヒーだ」" in ch1 and "＊" not in ch1, ch1[-40:]
     assert "\n\n" in ch1
     ch2 = (out / "chapter_002.txt").read_text(encoding="utf-8")
-    assert "３" not in ch2.splitlines()[-1], "chapter 3 must be cut out of chapter 2's file"
+    assert ch2.startswith("第2章\n\n") and "３" not in ch2, "chapter 3 must be cut out of chapter 2's file"
+    assert bs.chapter_header({"number": 7, "name": ""}) == ["第7章"]
+    assert bs.chapter_header({"number": 0, "name": "カラスと呼ばれる少年"}) == ["第0章", "カラスと呼ばれる少年"]
     others = sorted(p.name for p in (out / ee.NON_CHAPTER_SUBDIR).glob("*.txt"))
     assert any("あとがき" in n for n in others) and any("奥付" in n for n in others), others
     saved = json.loads((out / bs.PLAN_NAME).read_text(encoding="utf-8"))
@@ -109,7 +112,8 @@ def test_plan_path(tmp):
     r = ee.extract_epub(str(epub_path), str(out2), False, False, log=lambda *_: None,
                         ask=lambda kind, text: asked.append(kind) or True)
     assert asked == ["afterword"], asked
-    assert (out2 / "chapter_004.txt").read_text(encoding="utf-8").startswith("あとがき")
+    after = (out2 / "chapter_004.txt").read_text(encoding="utf-8")
+    assert after.startswith("第4章\n\nあとがき\n\nこれは本文"), repr(after[:24])
 
     # a hand-edited plan: drop chapter 3, write from the plan
     out3 = tmp / "out3"

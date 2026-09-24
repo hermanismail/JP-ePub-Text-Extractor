@@ -36,14 +36,16 @@ CHECKS = {
     "1q84_1": dict(chapters=24, afterwords=0, method="headings+toc", agreement="agree",
                    first="第１章", last="第24章"),
     # 第　１　章 (spaces inside) + full TOC; unnumbered prologue first.
+    # an unnumbered prologue before 第１章 -> 第0章, so no number repeats
     "kafka_1": dict(chapters=24, afterwords=0, method="headings+toc", agreement="agree",
-                    first="カラスと呼ばれる少年", last="第"),
+                    first="カラスと呼ばれる少年", last="第", numbers=list(range(0, 24))),
     # headings are pictures with EMPTY alt - only the TOC knows.
     "nejimaki_1": dict(chapters=13, afterwords=0, method="toc", first="１", last="13"),
     # named chapters, title pages are pictures, a chapter spans many files,
     # 外伝 side story, 付録 + あとがき at the end.
+    # 外伝 has no number of its own and follows 第七章 -> 第8章
     "yojo-senki-2": dict(chapters=8, afterwords=1, method="toc",
-                         first="第一章", last="外伝"),
+                         first="第一章", last="外伝", numbers=list(range(1, 9))),
 }
 
 
@@ -76,7 +78,25 @@ def check(name, spec, show_table):
         want(len({u["part"] for u in chapters if u["part"]}) == spec["parts"], "part names")
     for u in chapters:
         want(u["chars"] >= bs.MIN_FOLLOW_CHARS, f"chapter {u['chapter']} only {u['chars']} chars")
-    texts = {u["chapter"]: bs.unit_text(book, u) for u in chapters}
+    texts = {}
+    for u in chapters:
+        u["include"] = True
+        texts[u["chapter"]] = bs.unit_text(book, u)
+    # every chapter opens with 第X章, a blank line, its title (if any) and
+    # another blank line - and never repeats that title in the body
+    numbers = [u["number"] for u in chapters]
+    want(len(set(numbers)) == len(numbers), f"two chapters share a 第X章 number: {numbers}")
+    want(numbers == sorted(numbers), f"chapter numbers are out of order: {numbers}")
+    for u in chapters:
+        head = texts[u["chapter"]].split("\n\n")
+        want(head[0] == f"第{u['number']}章", f"chapter {u['chapter']} opens {head[0]!r}")
+        if u["name"]:
+            want(head[1] == u["name"], f"chapter {u['chapter']} title line {head[1]!r}")
+            first_line = head[2].splitlines()[0].replace("　", "").strip()
+            want(first_line != u["name"].replace("　", ""),
+                 f"chapter {u['chapter']} repeats its title as the first body line")
+    if "numbers" in spec:
+        want(numbers == spec["numbers"], f"numbers {numbers[:4]}...{numbers[-2:]}")
     for n, least in spec.get("min_chars", {}).items():
         want(len(texts[n]) >= least, f"chapter {n} is {len(texts[n])} chars, expected >= {least}")
     for n, s in spec.get("not_in", {}).items():

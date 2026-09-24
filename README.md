@@ -148,6 +148,27 @@ several files, or several chapters in one file, come out whole.
 - **Chapters** are written as `chapter_001.txt`, `chapter_002.txt`, … —
   the naming `JP-Audiobook-Generator` expects, so the output folder can be
   its input folder.
+- **Every chapter file opens with a standard header**, whatever the book
+  itself printed (`１`, `第壱章`, `第　１　章`, a picture, nothing):
+
+  ```
+  第1章
+
+  青豆
+
+  タクシーのラジオは、ＦＭ放送の…
+  ```
+
+  `第X章`, a blank line, then the chapter's title on its own line and
+  another blank line if it has one. X is the chapter's **own** number as
+  the book counts it, so a numbering drift is visible at a glance. The
+  book's heading line (and a title line under it) is removed from the
+  text, since the header now carries it. A chapter with no number of its
+  own gets one: a prologue before chapter 1 becomes `第0章` (kafka's
+  カラスと呼ばれる少年), and one after the last numbered chapter carries on
+  counting (yojo-senki-2's 外伝　借りてきた猫 → `第8章`). An afterword
+  answered "yes" gets the next number too. No two chapters ever share a
+  number, and `check_books.py` checks that on every book.
 - **An afterword (あとがき, 解説…) is always asked, never decided** — GUI:
   a Yes/No dialog; CLI: `--afterword yes|no` (without it the run stops
   after saving the plan). Yes makes it the next chapter.
@@ -193,8 +214,6 @@ handling needed for that part.
 
 ## Notes / known limitations
 
-- A chapter's heading line (e.g. `１`, `第１章　青豆`) stays at the top of
-  its chapter text, as it always has. Its title is also in the plan.
 - A book with no numbered headings AND no usable table of contents falls
   back to one chapter per long file and always stops for review.
 - Ruby spanning multiple kanji with irregular groupings (common in some
